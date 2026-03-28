@@ -53,6 +53,24 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Regex to find optimizer hints (/*+ ... */) and strip any nested /* ... */
+# comments inside them. sqlglot converts -- comments to /* */, which can end
+# up inside hint blocks, creating invalid nested comment syntax.
+# See: https://github.com/apache/superset/issues/38189
+_OPTIMIZER_HINT_RE = re.compile(r"/\*\+[^*]*\*+(?:[^/*][^*]*\*+)*/")
+_NESTED_COMMENT_RE = re.compile(r"/\*[^+].*?\*/")
+
+
+def _strip_nested_hint_comments(sql: str) -> str:
+    """Remove nested block comments inside optimizer hints."""
+
+    def _clean_hint(match: re.Match[str]) -> str:
+        hint = match.group(0)
+        # Strip any inner /* ... */ comments (not /*+ ... */ hints)
+        return _NESTED_COMMENT_RE.sub("", hint)
+
+    return _OPTIMIZER_HINT_RE.sub(_clean_hint, sql)
+
 
 # mapping between DB engine specs and sqlglot dialects
 SQLGLOT_DIALECTS = {
@@ -723,12 +741,17 @@ class SQLStatement(BaseSQLStatement[exp.Expression]):
         """
         Pretty-format the SQL statement.
         """
-        return Dialect.get_or_raise(self._dialect).generate(
+        result = Dialect.get_or_raise(self._dialect).generate(
             self._parsed,
             copy=True,
             comments=comments,
             pretty=True,
         )
+        # sqlglot converts `--` comments to `/* */` and may reattach them
+        # inside optimizer hint blocks (`/*+ ... */`), creating nested
+        # comments that are syntactically invalid for many engines.
+        # See: https://github.com/apache/superset/issues/38189
+        return _strip_nested_hint_comments(result)
 
     def get_settings(self) -> dict[str, str | bool]:
         """

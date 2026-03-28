@@ -3134,3 +3134,26 @@ def test_backtick_invalid_sql_still_fails() -> None:
     sql = "SELECT * FROM `table` WHERE"
     with pytest.raises(SupersetParseError):
         SQLScript(sql, "base")
+
+
+def test_format_optimizer_hint_no_nested_comments() -> None:
+    """
+    Test that comments converted from -- to /* */ by sqlglot don't
+    corrupt optimizer hint blocks. Regression test for #38189.
+    """
+    from superset.sql.parse import _strip_nested_hint_comments
+
+    # Nested comment inside optimizer hint should be stripped
+    sql = "SELECT /*+ SET_VAR(query_timeout /* increase timeout */ = 3000) */ * FROM t"
+    result = _strip_nested_hint_comments(sql)
+    assert "/* increase timeout */" not in result
+    assert "/*+" in result
+    assert "SET_VAR" in result
+
+    # Optimizer hint without nested comments should pass through unchanged
+    sql_clean = "SELECT /*+ SET_VAR(query_timeout = 3000) */ * FROM t"
+    assert _strip_nested_hint_comments(sql_clean) == sql_clean
+
+    # Regular block comments (not inside hints) should be preserved
+    sql_regular = "SELECT /* a comment */ col FROM t"
+    assert _strip_nested_hint_comments(sql_regular) == sql_regular
